@@ -1,151 +1,178 @@
 import axios from "axios";
-import readline from "readline";
 import fs from "fs";
 import dotenv from "dotenv";
+import chalk from "chalk";
+import inquirer from "inquirer";
 
 dotenv.config();
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-
 const JSON_FILE = "payloads.json";
+const API_MAIN = "https://deployment-hlsy5tjcguvea2aqgplixjjg.stag-vxzy.zettablock.com/main";
+const API_REPORT = "https://quests-usage-dev.prod.zettablock.com/api/report_usage";
+const API_INFERENCE = "https://neo-dev.prod.zettablock.com/v1/inference?id=";
 
-async function getWalletAddress() {
-  const wallets = Object.keys(process.env)
-    .filter((key) => key.startsWith("WALLET_ADDRESS_"))
-    .map((key) => ({ key, address: process.env[key] }));
+console.log(chalk.cyan.bold("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
+console.log(chalk.magenta.bold("🚀 SCRIPT SEDANG BERJALAN... 🚀"));
+console.log(chalk.cyan.bold("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
 
-  if (wallets.length > 0) {
-    console.log("Available Wallets:");
-    wallets.forEach(({ address }, index) => {
-      console.log(`${index + 1}. ${address.slice(0, 6)}...${address.slice(-4)}`);
-    });
-    console.log("0. Add new wallet");
+dotenv.config({ path: ".env" });
 
-    return new Promise((resolve) => {
-      rl.question("Select a wallet or add new (0): ", (choice) => {
-        const selectedIndex = parseInt(choice, 10);
-        if (selectedIndex > 0 && selectedIndex <= wallets.length) {
-          resolve(wallets[selectedIndex - 1].address);
-        } else {
-          rl.question("Enter new wallet address: ", (walletAddress) => {
-            const newKey = `WALLET_ADDRESS_${wallets.length + 1}`;
-            fs.appendFileSync(".env", `\n${newKey}=${walletAddress}`);
-            resolve(walletAddress);
-          });
-        }
-      });
-    });
+async function mainMenu() {
+  const { menuOption } = await inquirer.prompt([
+    {
+      type: "list",
+      name: "menuOption",
+      message: "Pilih opsi:",
+      choices: ["Run Script", "Tambah Wallet", "Keluar"],
+    },
+  ]);
+
+  if (menuOption === "Run Script") {
+    await runScript();
+  } else if (menuOption === "Tambah Wallet") {
+    await addWalletMenu();
+    dotenv.config({ path: ".env" });
+    await mainMenu();
   } else {
-    return new Promise((resolve) => {
-      rl.question("Enter your wallet address: ", (walletAddress) => {
-        fs.appendFileSync(".env", `\nWALLET_ADDRESS_1=${walletAddress}`);
-        resolve(walletAddress);
+    console.log(chalk.red("✖ Operasi dibatalkan."));
+    process.exit(0);
+  }
+}
+
+function getWallets() {
+  dotenv.config({ path: ".env" });
+  return Object.keys(process.env)
+    .filter((key) => key.startsWith("WALLET_ADDRESS_"))
+    .map((key) => process.env[key]);
+}
+
+async function addWalletMenu() {
+  while (true) {
+    const { walletAddress } = await inquirer.prompt([
+      {
+        type: "input",
+        name: "walletAddress",
+        message: "Masukkan alamat wallet baru (kosong untuk kembali):",
+      },
+    ]);
+
+    if (!walletAddress.trim()) {
+      console.log(chalk.yellow("⚠ Kembali ke menu utama..."));
+      return;
+    }
+
+    const newKey = `WALLET_ADDRESS_${getWallets().length + 1}`;
+    fs.appendFileSync(".env", `\n${newKey}=${walletAddress}`);
+    dotenv.config({ path: ".env" });
+    console.log(chalk.green("✅ Wallet berhasil ditambahkan!"));
+  }
+}
+
+async function runScript() {
+  while (true) {
+    const wallets = getWallets();
+    if (wallets.length === 0) {
+      console.log(chalk.red("⚠ Tidak ada wallet yang tersedia. Tambahkan wallet terlebih dahulu."));
+      await addWalletMenu();
+      continue;
+    }
+
+    const { selectedWallets } = await inquirer.prompt([
+      {
+        type: "checkbox",
+        name: "selectedWallets",
+        message: "Pilih wallet untuk digunakan:",
+        choices: wallets,
+      },
+    ]);
+
+    if (selectedWallets.length === 0) {
+      console.log(chalk.red("⚠ Tidak ada wallet yang dipilih. Kembali ke menu utama..."));
+      return await mainMenu();
+    }
+
+    const payloads = JSON.parse(fs.readFileSync(JSON_FILE, "utf8"));
+    const results = {};
+
+    for (const message of payloads) {
+      console.log(chalk.blue(`[Question] ${message}`));
+      results[message] = [];
+
+      await Promise.all(selectedWallets.map(async (wallet) => {
+        const result = await sendRequest(wallet, message);
+        if (result) results[message].push(result);
+      }));
+
+      results[message].forEach((res) => {
+        console.log(chalk.green(`✔ ${res.wallet} - ${res.status} - ${res.txHash}`));
       });
-    });
+      console.log("");
+    }
+
+    console.log(chalk.green.bold("✅ Semua proses selesai!"));
+
+    const { returnToMenu } = await inquirer.prompt([
+      {
+        type: "confirm",
+        name: "returnToMenu",
+        message: "Kembali ke menu utama?",
+        default: true,
+      },
+    ]);
+
+    if (returnToMenu) {
+      await mainMenu();
+    } else {
+      process.exit(0);
+    }
   }
 }
 
 async function sendRequest(walletAddress, message) {
   try {
-    const payloadMain = {
-      wallet_address: walletAddress,
-      message,
-      stream: true,
-    };
-
-    process.stdout.write(`[Question] ${message} `);
-
     const response = await axios.post(
-      "https://deployment-hlsy5tjcguvea2aqgplixjjg.stag-vxzy.zettablock.com/main",
-      payloadMain,
-      {
-        headers: { "Content-Type": "application/json" },
-        responseType: "stream",
-      }
-    );
-
-    let collectedData = "";
-    response.data.on("data", (chunk) => {
-      const jsonStr = chunk.toString().trim();
-      const jsonLines = jsonStr.split("\n");
-      jsonLines.forEach((line) => {
-        if (line.startsWith("data: ")) {
-          const jsonData = line.replace("data: ", "").trim();
-          if (jsonData === "[DONE]") return;
-          try {
-            const parsed = JSON.parse(jsonData);
-            if (parsed.choices?.[0]?.delta?.content) {
-              collectedData += parsed.choices[0].delta.content;
-            }
-          } catch (err) {
-            console.error("Error parsing response chunk:", err.message);
-          }
-        }
-      });
-    });
-
-    await new Promise((resolve) => response.data.on("end", resolve));
-
-    const payloadReport = {
-      wallet_address: walletAddress,
-      agent_id: "deployment_HlsY5TJcguvEA2aqgPliXJjg",
-      request_text: message,
-      response_text: collectedData,
-      request_metadata: { source: "api_test" },
-    };
-
-    const reportResponse = await axios.post(
-      "https://quests-usage-dev.prod.zettablock.com/api/report_usage",
-      payloadReport,
+      API_MAIN,
+      { wallet_address: walletAddress, message, stream: true },
       { headers: { "Content-Type": "application/json" } }
     );
-    process.stdout.write(`[Report Usage] ${reportResponse.data.message} `);
+    const collectedData = response.data;
+
+    const reportResponse = await axios.post(
+      API_REPORT,
+      {
+        wallet_address: walletAddress,
+        agent_id: "deployment_HlsY5TJcguvEA2aqgPliXJjg",
+        request_text: message,
+        response_text: collectedData,
+        request_metadata: { source: "api_test" },
+      },
+      { headers: { "Content-Type": "application/json" } }
+    );
 
     const interactionId = reportResponse.data.interaction_id;
     if (!interactionId) throw new Error("interaction_id not found");
 
     let status = "pending", txHash = "";
-    while (status === "pending" || !txHash) {
+    let retries = 0, maxRetries = 10;
+
+    while ((status === "pending" || !txHash) && retries < maxRetries) {
       await new Promise((r) => setTimeout(r, 2000));
-      const inferenceResponse = await axios.get(
-        `https://neo-dev.prod.zettablock.com/v1/inference?id=${interactionId}`,
-        {
-          headers: {
-            "Accept": "*/*",
-            "Origin": "https://agents.testnet.gokite.ai",
-            "Referer": "https://agents.testnet.gokite.ai/",
-            "User-Agent": "Mozilla/5.0",
-          },
-        }
-      );
+      const inferenceResponse = await axios.get(`${API_INFERENCE}${interactionId}`);
       status = inferenceResponse.data.data.status;
       txHash = inferenceResponse.data.data.tx_hash;
+      retries++;
     }
 
-    console.log(`[Inference] Status: ${status}, TxHash: ${txHash}`);
+    if (status === "pending" || !txHash) {
+      console.log(chalk.yellow(`⚠ ${walletAddress} - Timeout, lanjut ke pertanyaan berikutnya.`));
+      return null;
+    }
+
+    return { wallet: walletAddress, status, txHash };
   } catch (error) {
-    if (error.response?.status === 429 || error.response?.data?.error?.includes("Rate limit")) {
-      console.error("Skipping due to rate limit...");
-      return;
-    }
-    console.error("Error:", error.response?.data || error.message);
+    console.log(chalk.red("Error:"), error.message);
+    return null;
   }
 }
 
-async function main() {
-  const walletAddress = await getWalletAddress();
-  const payloads = JSON.parse(fs.readFileSync(JSON_FILE, "utf8"));
-
-  for (const message of payloads) {
-    await sendRequest(walletAddress, message);
-    console.log("\n");
-  }
-
-  rl.close(); // Pastikan readline ditutup
-  process.exit(0); // Paksa keluar program setelah semua selesai
-}
-
-main();
+mainMenu();
