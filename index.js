@@ -7,9 +7,8 @@ import inquirer from "inquirer";
 dotenv.config();
 
 const JSON_FILE = "payloads.json";
-const API_MAIN = "https://deployment-hlsy5tjcguvea2aqgplixjjg.stag-vxzy.zettablock.com/main";
+const API_MAIN = "https://deployment-uu9y1z4z85rapgwkss1muuiz.stag-vxzy.zettablock.com/main";
 const API_REPORT = "https://quests-usage-dev.prod.zettablock.com/api/report_usage";
-const API_INFERENCE = "https://neo-dev.prod.zettablock.com/v1/inference?id=";
 
 console.log(chalk.cyan.bold("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
 console.log(chalk.magenta.bold("🚀 SCRIPT SEDANG BERJALAN... 🚀"));
@@ -92,21 +91,14 @@ async function runScript() {
     }
 
     const payloads = JSON.parse(fs.readFileSync(JSON_FILE, "utf8"));
-    const results = {};
 
     for (const message of payloads) {
-      console.log(chalk.blue(`[Question] ${message}`));
-      results[message] = [];
+      console.log(chalk.blue(`\n[Question] ${message}`));
 
       await Promise.all(selectedWallets.map(async (wallet) => {
         const result = await sendRequest(wallet, message);
-        if (result) results[message].push(result);
+        console.log(result.startsWith("Error") ? chalk.red(`${wallet} - ${result}`) : chalk.green(`${wallet} - ${result}`));
       }));
-
-      results[message].forEach((res) => {
-        console.log(chalk.green(`✔ ${res.wallet} - ${res.status} - ${res.txHash}`));
-      });
-      console.log("");
     }
 
     console.log(chalk.green.bold("✅ Semua proses selesai!"));
@@ -135,43 +127,24 @@ async function sendRequest(walletAddress, message) {
       { wallet_address: walletAddress, message, stream: true },
       { headers: { "Content-Type": "application/json" } }
     );
+
     const collectedData = response.data;
 
     const reportResponse = await axios.post(
       API_REPORT,
       {
         wallet_address: walletAddress,
-        agent_id: "deployment_HlsY5TJcguvEA2aqgPliXJjg",
+        agent_id: "deployment_UU9y1Z4Z85RAPGwkss1mUUiZ",
         request_text: message,
         response_text: collectedData,
-        request_metadata: { source: "api_test" },
+        request_metadata: {},
       },
       { headers: { "Content-Type": "application/json" } }
     );
 
-    const interactionId = reportResponse.data.interaction_id;
-    if (!interactionId) throw new Error("interaction_id not found");
-
-    let status = "pending", txHash = "";
-    let retries = 0, maxRetries = 10;
-
-    while ((status === "pending" || !txHash) && retries < maxRetries) {
-      await new Promise((r) => setTimeout(r, 2000));
-      const inferenceResponse = await axios.get(`${API_INFERENCE}${interactionId}`);
-      status = inferenceResponse.data.data.status;
-      txHash = inferenceResponse.data.data.tx_hash;
-      retries++;
-    }
-
-    if (status === "pending" || !txHash) {
-      console.log(chalk.yellow(`⚠ ${walletAddress} - Timeout, lanjut ke pertanyaan berikutnya.`));
-      return null;
-    }
-
-    return { wallet: walletAddress, status, txHash };
+    return reportResponse.data.message;
   } catch (error) {
-    console.log(chalk.red("Error:"), error.message);
-    return null;
+    return chalk.red(`Error: ${error.message}`);
   }
 }
 
