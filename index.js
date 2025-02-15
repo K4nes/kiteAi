@@ -8,8 +8,14 @@ import fs from 'fs';
 // Load environment variables
 dotenv.config();
 
+<<<<<<< HEAD
 // Load payloads from JSON file
 const payloads = JSON.parse(fs.readFileSync('payloads.json', 'utf-8'));
+=======
+const JSON_FILE = "payloads.json";
+const API_MAIN = "https://deployment-uu9y1z4z85rapgwkss1muuiz.stag-vxzy.zettablock.com/main";
+const API_REPORT = "https://quests-usage-dev.prod.zettablock.com/api/report_usage";
+>>>>>>> 47f192547631bbabd407c5c6785234eb0a6b9902
 
 // MAIN API
 const mainApiUrl = 'https://deployment-hp4y88pxnqxwlmpxllicjzzn.stag-vxzy.zettablock.com/main';
@@ -191,7 +197,37 @@ const mainMenu = async () => {
     ]);
 
     if (selectedWallets.length === 0) {
+<<<<<<< HEAD
       console.log(chalk.yellow('⚠ Tidak ada wallet yang dipilih. Kembali ke menu utama...'));
+=======
+      console.log(chalk.red("⚠ Tidak ada wallet yang dipilih. Kembali ke menu utama..."));
+      return await mainMenu();
+    }
+
+    const payloads = JSON.parse(fs.readFileSync(JSON_FILE, "utf8"));
+
+    for (const message of payloads) {
+      console.log(chalk.blue(`\n[Question] ${message}`));
+
+      await Promise.all(selectedWallets.map(async (wallet) => {
+        const result = await sendRequest(wallet, message);
+        console.log(result.startsWith("Error") ? chalk.red(`${wallet} - ${result}`) : chalk.green(`${wallet} - ${result}`));
+      }));
+    }
+
+    console.log(chalk.green.bold("✅ Semua proses selesai!"));
+
+    const { returnToMenu } = await inquirer.prompt([
+      {
+        type: "confirm",
+        name: "returnToMenu",
+        message: "Kembali ke menu utama?",
+        default: true,
+      },
+    ]);
+
+    if (returnToMenu) {
+>>>>>>> 47f192547631bbabd407c5c6785234eb0a6b9902
       await mainMenu();
       return;
     }
@@ -208,6 +244,7 @@ const mainMenu = async () => {
   }
 };
 
+<<<<<<< HEAD
 // Main function to execute the flow
 const main = async () => {
   displayWelcomeMessage();
@@ -216,3 +253,34 @@ const main = async () => {
 
 // Run the main function
 main();
+=======
+async function sendRequest(walletAddress, message) {
+  try {
+    const response = await axios.post(
+      API_MAIN,
+      { wallet_address: walletAddress, message, stream: true },
+      { headers: { "Content-Type": "application/json" } }
+    );
+
+    const collectedData = response.data;
+
+    const reportResponse = await axios.post(
+      API_REPORT,
+      {
+        wallet_address: walletAddress,
+        agent_id: "deployment_UU9y1Z4Z85RAPGwkss1mUUiZ",
+        request_text: message,
+        response_text: collectedData,
+        request_metadata: {},
+      },
+      { headers: { "Content-Type": "application/json" } }
+    );
+
+    return reportResponse.data.message;
+  } catch (error) {
+    return chalk.red(`Error: ${error.message}`);
+  }
+}
+
+mainMenu();
+>>>>>>> 47f192547631bbabd407c5c6785234eb0a6b9902
