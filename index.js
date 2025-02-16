@@ -13,8 +13,10 @@ const payloads = JSON.parse(fs.readFileSync('payloads.json', 'utf-8'));
 
 // MAIN API
 const mainApiUrl = 'https://deployment-hp4y88pxnqxwlmpxllicjzzn.stag-vxzy.zettablock.com/main';
+
 // TTFT API
 const ttftApiUrl = 'https://quests-usage-dev.prod.zettablock.com/api/ttft';
+
 // REPORT USAGE API
 const reportUsageApiUrl = 'https://quests-usage-dev.prod.zettablock.com/api/report_usage';
 
@@ -38,15 +40,25 @@ const sendMainApiRequest = async (message) => {
     let responseData = '';
     response.data.on('data', (chunk) => {
       const chunkStr = chunk.toString();
-      if (chunkStr.trim() === 'data: [DONE]') return;
 
-      try {
-        const jsonData = JSON.parse(chunkStr.replace('data: ', ''));
-        if (jsonData.choices[0].delta.content) {
-          responseData += jsonData.choices[0].delta.content;
+      // Split the chunk by newline to handle multiple JSON objects
+      const lines = chunkStr.split('\n');
+      for (const line of lines) {
+        if (line.trim() === '' || line.trim() === 'data: [DONE]') continue;
+
+        try {
+          // Remove "data: " prefix and parse JSON
+          const jsonStr = line.replace('data: ', '').trim();
+          if (jsonStr) {
+            const jsonData = JSON.parse(jsonStr);
+            if (jsonData.choices[0].delta.content) {
+              responseData += jsonData.choices[0].delta.content;
+            }
+          }
+        } catch (error) {
+          console.error('Error parsing chunk:', error);
+          console.error('Chunk content:', line);
         }
-      } catch (error) {
-        console.error('Error parsing chunk:', error);
       }
     });
 
@@ -105,7 +117,7 @@ const sendReportUsageApiRequest = async (walletAddress, requestText, responseTex
 
 // Function to display welcome message
 const displayWelcomeMessage = () => {
-  console.log(chalk.yellow(figlet.textSync('KiteAI Bot', { font: 'Slant', horizontalLayout: 'fitted' })));
+  console.log(chalk.yellow(figlet.textSync('KiteAI', { horizontalLayout: 'full', font: 'Small' })));
 };
 
 // Function to get wallets from .env
@@ -139,18 +151,26 @@ const addWalletMenu = async () => {
   }
 };
 
-// Function to run the script for a single wallet and question
-const runScriptForWalletAndQuestion = async (walletAddress, question) => {
+// Function to run the script for a single question and multiple wallets
+const runScriptForQuestionAndWallets = async (question, selectedWallets) => {
   console.log(chalk.magenta(`\n[Question] ${question}`));
 
-  const { responseData, timeToFirstToken } = await sendMainApiRequest(question);
-  console.log(chalk.white('Response Content:'), responseData);
+  // Send MAIN API request for the first wallet to get TTFT and REPORT USAGE responses
+  const { responseData: firstResponse, timeToFirstToken } = await sendMainApiRequest(question);
 
+  // Display TTFT and REPORT USAGE responses once
   const ttftResponse = await sendTtftApiRequest(timeToFirstToken);
   console.log(chalk.green('TTFT API Response:'), ttftResponse);
 
-  const reportUsageResponse = await sendReportUsageApiRequest(walletAddress, question, responseData);
+  const reportUsageResponse = await sendReportUsageApiRequest(selectedWallets[0], question, firstResponse);
   console.log(chalk.blue('REPORT USAGE API Response:'), reportUsageResponse);
+
+  // Display Response Content for each wallet
+  for (const wallet of selectedWallets) {
+    const { responseData } = await sendMainApiRequest(question);
+    const truncatedResponse = responseData.substring(0, 50); // Ambil 50 karakter pertama
+    console.log(chalk.white(`Response Content for ${wallet}:`), truncatedResponse);
+  }
 };
 
 // Function to run the script for multiple wallets
@@ -158,7 +178,7 @@ const runScriptForWallets = async (selectedWallets) => {
   console.log(chalk.cyan(`\nRunning script for Wallet Addresses: ${selectedWallets.join(', ')}`));
 
   for (const question of payloads) {
-    await Promise.all(selectedWallets.map((wallet) => runScriptForWalletAndQuestion(wallet, question)));
+    await runScriptForQuestionAndWallets(question, selectedWallets);
   }
 };
 
