@@ -12,7 +12,7 @@ dotenv.config();
 const payloads = JSON.parse(fs.readFileSync('payloads.json', 'utf-8'));
 
 // MAIN API
-const mainApiUrl = 'https://deployment-hp4y88pxnqxwlmpxllicjzzn.stag-vxzy.zettablock.com/main';
+const mainApiUrl = 'https://deployment-htmtbvzpc0vboktahrrv1b7f.stag-vxzy.zettablock.com/main';
 
 // TTFT API
 const ttftApiUrl = 'https://quests-usage-dev.prod.zettablock.com/api/ttft';
@@ -20,57 +20,73 @@ const ttftApiUrl = 'https://quests-usage-dev.prod.zettablock.com/api/ttft';
 // REPORT USAGE API
 const reportUsageApiUrl = 'https://quests-usage-dev.prod.zettablock.com/api/report_usage';
 
+// Cache for API responses
+const cache = {};
+
 // Function to calculate time difference in milliseconds
 const calculateTimeDifference = (startTime, endTime) => {
   return endTime - startTime;
 };
 
-// Function to send request to MAIN API
-const sendMainApiRequest = async (message) => {
+// Function to send request to MAIN API with retries and caching
+const sendMainApiRequest = async (message, retries = 3) => {
+  if (cache[message]) {
+    return cache[message];
+  }
+
   const startTime = Date.now();
-  try {
-    const response = await axios.post(mainApiUrl, { message, stream: true }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream'
-      },
-      responseType: 'stream'
-    });
-
-    let responseData = '';
-    response.data.on('data', (chunk) => {
-      const chunkStr = chunk.toString();
-
-      // Split the chunk by newline to handle multiple JSON objects
-      const lines = chunkStr.split('\n');
-      for (const line of lines) {
-        if (line.trim() === '' || line.trim() === 'data: [DONE]') continue;
-
-        try {
-          // Remove "data: " prefix and parse JSON
-          const jsonStr = line.replace('data: ', '').trim();
-          if (jsonStr) {
-            const jsonData = JSON.parse(jsonStr);
-            if (jsonData.choices[0].delta.content) {
-              responseData += jsonData.choices[0].delta.content;
-            }
-          }
-        } catch (error) {
-          console.error('Error parsing chunk:', error);
-          console.error('Chunk content:', line);
-        }
-      }
-    });
-
-    return new Promise((resolve) => {
-      response.data.on('end', () => {
-        const endTime = Date.now();
-        const timeToFirstToken = calculateTimeDifference(startTime, endTime);
-        resolve({ responseData, timeToFirstToken });
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await axios.post(mainApiUrl, { message, stream: true }, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        },
+        responseType: 'stream'
       });
-    });
-  } catch (error) {
-    console.error('Error in MAIN API request:', error);
+
+      let buffer = '';
+      let responseData = '';
+
+      response.data.on('data', (chunk) => {
+        buffer += chunk.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // Keep incomplete lines in the buffer
+
+        for (const line of lines) {
+          if (line.trim() === '' || line.trim() === 'data: [DONE]') continue;
+
+          try {
+            const jsonStr = line.replace('data: ', '').trim();
+            if (jsonStr) {
+              const jsonData = JSON.parse(jsonStr);
+              if (jsonData.choices[0].delta.content) {
+                responseData += jsonData.choices[0].delta.content;
+              }
+            }
+          } catch (error) {
+            console.error('Error parsing chunk:', error);
+          }
+        }
+      });
+
+      return new Promise((resolve) => {
+        response.data.on('end', () => {
+          const endTime = Date.now();
+          const timeToFirstToken = calculateTimeDifference(startTime, endTime);
+          cache[message] = { responseData, timeToFirstToken };
+          resolve(cache[message]);
+        });
+      });
+    } catch (error) {
+      console.error(`Attempt ${i + 1} failed:`, error.message);
+      if (i === retries - 1) {
+        return { responseData: '', timeToFirstToken: 0 };
+      }
+      // Wait for 2 seconds before retrying
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
   }
 };
 
@@ -97,7 +113,7 @@ const sendTtftApiRequest = async (timeToFirstToken) => {
 const sendReportUsageApiRequest = async (walletAddress, requestText, responseText) => {
   const reportUsagePayload = {
     wallet_address: walletAddress,
-    agent_id: "deployment_Hp4Y88pxNQXwLMPxlLICJZzN",
+    agent_id: "deployment_htmTBVZpC0vbOkTAHRrv1b7F",
     request_text: requestText,
     response_text: responseText,
     request_metadata: {}
@@ -158,6 +174,11 @@ const runScriptForQuestionAndWallets = async (question, selectedWallets) => {
   // Send MAIN API request for the first wallet to get TTFT and REPORT USAGE responses
   const { responseData: firstResponse, timeToFirstToken } = await sendMainApiRequest(question);
 
+  if (!firstResponse) {
+    console.log(chalk.red('✖ No response received from MAIN API. Skipping this question.'));
+    return;
+  }
+
   // Display TTFT and REPORT USAGE responses once
   const ttftResponse = await sendTtftApiRequest(timeToFirstToken);
   console.log(chalk.green('TTFT API Response:'), ttftResponse);
@@ -168,7 +189,7 @@ const runScriptForQuestionAndWallets = async (question, selectedWallets) => {
   // Display Response Content for each wallet
   for (const wallet of selectedWallets) {
     const { responseData } = await sendMainApiRequest(question);
-    const truncatedResponse = responseData.substring(0, 50); // Ambil 50 karakter pertama
+    const truncatedResponse = responseData ? responseData.substring(0, 50) : 'No response';
     console.log(chalk.white(`Response Content for ${wallet}:`), truncatedResponse);
   }
 };
@@ -177,6 +198,7 @@ const runScriptForQuestionAndWallets = async (question, selectedWallets) => {
 const runScriptForWallets = async (selectedWallets) => {
   console.log(chalk.cyan(`\nRunning script for Wallet Addresses: ${selectedWallets.join(', ')}`));
 
+  // Process questions sequentially
   for (const question of payloads) {
     await runScriptForQuestionAndWallets(question, selectedWallets);
   }
