@@ -127,7 +127,9 @@ const sendReportUsageApiRequest = async (walletAddress, requestText, responseTex
     });
     return response.data.message;
   } catch (error) {
-    console.error('Error in REPORT USAGE API request:', error);
+    const errorCode = error.response?.status;
+    const detailedError = error.response?.data?.error || error.response?.data?.message || error.message;
+    return `Error ${errorCode}: ${detailedError}`;
   }
 };
 
